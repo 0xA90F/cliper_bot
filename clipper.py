@@ -76,7 +76,7 @@ def _is_rate_limit(err_str: str) -> bool:
 
 
 class YouTubeClipper:
-    MAX_CLIP_DURATION_SECS = 300  # 5 minutes hard cap per clip
+    MAX_CLIP_DURATION_SECS = 500  # 5 minutes hard cap per clip
 
     def __init__(self, anthropic_api_key: str, output_dir: str = "/tmp/yt-clips"):
         self.client = anthropic.Anthropic(api_key=anthropic_api_key)
