@@ -168,11 +168,48 @@ class YouTubeClipper:
                     "Lihat README bagian 'Setup Cookies'."
                 ) from e
             raise
+
+        # Log available formats for debugging
+        formats = info.get("formats", [])
+        fmt_summary = ", ".join(
+            f"{f.get('format_id','?')}({f.get('height','?')}p)"
+            for f in formats[-8:]  # last 8 = usually best quality ones
+        ) if formats else "none"
+        logger.info(f"Available formats sample: {fmt_summary}")
+
         return {
             "title": info.get("title", "Unknown"),
             "duration": info.get("duration", 0),
             "id": info.get("id", ""),
+            "formats": [
+                {
+                    "id": f.get("format_id"),
+                    "ext": f.get("ext"),
+                    "height": f.get("height"),
+                    "vcodec": f.get("vcodec"),
+                    "acodec": f.get("acodec"),
+                }
+                for f in formats
+            ],
         }
+
+    def list_formats(self, url: str) -> str:
+        """Return human-readable format list for /cookiestatus debug."""
+        try:
+            info = self.fetch_info(url)
+            fmts = info.get("formats", [])
+            if not fmts:
+                return "Tidak ada format tersedia (mungkin video private/restricted)"
+            lines = ["Format tersedia:"]
+            for f in fmts:
+                h = f.get("height") or "audio"
+                lines.append(
+                    f"  {f['id']:>8} | {str(f.get('ext','?')):<6} | "
+                    f"{str(h):<6} | v={f.get('vcodec','none')[:10]} a={f.get('acodec','none')[:10]}"
+                )
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Error listing formats: {e}"
 
     # ── 2. Download subtitles ─────────────────────────────────────────────────
     def _download_subtitles(self, url: str, dl_dir: Path) -> Optional[Path]:
@@ -273,29 +310,20 @@ Return JSON array:
         dl_dir = self.output_dir / video_id
         dl_dir.mkdir(parents=True, exist_ok=True)
 
-        # Single format string — yt-dlp tries each "/" alternative automatically.
-        # This is more reliable than catching exceptions in a Python loop.
-        FORMAT = (
-            "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]"
-            "/bestvideo[height<=480]+bestaudio[ext=m4a]"
-            "/bestvideo[height<=480]+bestaudio"
-            "/best[height<=480]"
-            "/bestvideo[height<=720]+bestaudio"
-            "/best[height<=720]"
-            "/best"
-        )
-
+        # Use "bestvideo+bestaudio/best" with format_sort to prefer small sizes.
+        # Avoid any height/ext filters — these cause "format not available" when
+        # YouTube serves only a limited set of formats (common without cookies).
+        # FFmpeg will compress to 480p anyway in _compress_video().
         opts = {
             **self._base_ydl_opts(),
-            "format": FORMAT,
+            "format": "bestvideo+bestaudio/best",
+            "format_sort": ["res:480", "ext:mp4:m4a", "size"],
             "outtmpl": str(dl_dir / "%(title)s.%(ext)s"),
             "writesubtitles": True,
             "writeautomaticsub": True,
             "subtitleslangs": ["en", "id"],
             "subtitlesformat": "srt",
             "merge_output_format": "mp4",
-            # Let yt-dlp pick the best available — do not abort on format mismatch
-            "ignoreerrors": False,
         }
 
         for attempt in range(3):

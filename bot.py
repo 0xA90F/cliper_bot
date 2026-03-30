@@ -119,22 +119,40 @@ async def cookiestatus_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     icon = "✅" if status["ok"] else "❌"
     source = status.get("source") or "—"
     detail = status.get("detail", "")
-    await update.message.reply_text(
+
+    msg = await update.message.reply_text(
         f"{icon} *Status Cookies YouTube*\n\n"
         f"*Sumber:* `{source}`\n"
         f"*Detail:* {detail}\n\n"
         + (
-            "Cookies aktif — YouTube tidak akan blokir bot."
+            "Cookies aktif.\nMengecek format video tersedia…"
             if status["ok"] else
             "⚠️ Cookies bermasalah!\n\n"
             "*Cara fix:*\n"
             "1. Export cookies dari browser (login YouTube dulu)\n"
-            "2. Jalankan: `python export_cookies.py cookies.txt`\n"
-            "3. Copy output ke Railway Variables sebagai `YOUTUBE_COOKIES`\n"
-            "4. Atau paste langsung isi `cookies.txt` ke variable (tanpa encode)"
+            "2. Paste isi `cookies.txt` langsung ke Railway Variables sebagai `YOUTUBE_COOKIES`\n"
+            "   _(tidak perlu encode base64 — paste plaintext langsung)_"
         ),
         parse_mode=ParseMode.MARKDOWN,
     )
+
+    # If cookies ok, also show available formats for a known test video
+    if status["ok"]:
+        TEST_URL = "https://www.youtube.com/watch?v=BaW_jenozKc"  # yt-dlp test video
+        clipper = YouTubeClipper(
+            anthropic_api_key=ANTHROPIC_API_KEY,
+            output_dir=f"/tmp/yt-test",
+        )
+        fmt_text = await asyncio.get_event_loop().run_in_executor(
+            None, clipper.list_formats, TEST_URL
+        )
+        await msg.edit_text(
+            f"{icon} *Status Cookies YouTube*\n\n"
+            f"*Sumber:* `{source}`\n"
+            f"*Detail:* {detail}\n\n"
+            f"```\n{fmt_text[:800]}\n```",
+            parse_mode=ParseMode.MARKDOWN,
+        )
 
 
 async def cancel_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
