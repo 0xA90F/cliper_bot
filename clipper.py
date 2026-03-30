@@ -76,7 +76,7 @@ def _is_rate_limit(err_str: str) -> bool:
 
 
 class YouTubeClipper:
-    MAX_CLIP_DURATION_SECS = 500  # 5 minutes hard cap per clip
+    MAX_CLIP_DURATION_SECS = 300  # 5 minutes hard cap per clip
 
     def __init__(self, anthropic_api_key: str, output_dir: str = "/tmp/yt-clips"):
         self.client = anthropic.Anthropic(api_key=anthropic_api_key)
@@ -215,7 +215,7 @@ Return JSON array:
         dl_dir.mkdir(parents=True, exist_ok=True)
         opts = {
             **self._base_ydl_opts(),
-            "format": "bestvideo[height<=480]+bestaudio/best[height<=4800]",
+            "format": "bestvideo[height<=720]+bestaudio/best[height<=720]",
             "outtmpl": str(dl_dir / "%(title)s.%(ext)s"),
             "writesubtitles": True,
             "writeautomaticsub": True,
@@ -312,9 +312,9 @@ Return JSON array:
     def _compress_video(self, input_path: Path, output_path: Path) -> None:
         cmd = [
             "ffmpeg", "-y", "-i", str(input_path),
-            "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease",
+            "-vf", "scale='min(854,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
             "-c:v", "libx264", "-crf", "28", "-preset", "fast",
-            "-maxrate", "1500k", "-bufsize", "3000k",
+            "-maxrate", "800k", "-bufsize", "1600k",
             "-c:a", "aac", "-b:a", "96k", "-ac", "2",
             "-movflags", "+faststart", str(output_path),
         ]
