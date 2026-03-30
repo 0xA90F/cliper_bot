@@ -269,12 +269,24 @@ Return JSON array:
         return chapters
 
     # ── 4. Download full video ────────────────────────────────────────────────
+    # Format priority list — tries each in order until one succeeds
+    _FORMAT_FALLBACKS = [
+        # Best: separate video+audio streams merged to mp4
+        "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio",
+        # Good: any single-file format ≤480p
+        "best[height<=480]",
+        # Wider: any mp4 ≤720p
+        "best[height<=720][ext=mp4]/best[height<=720]",
+        # Last resort: whatever is available
+        "best",
+    ]
+
     def download_video_and_subs(self, url: str, video_id: str) -> tuple[Path, Optional[Path]]:
         dl_dir = self.output_dir / video_id
         dl_dir.mkdir(parents=True, exist_ok=True)
-        opts = {
+
+        base_opts = {
             **self._base_ydl_opts(),
-            "format": "bestvideo[height<=720]+bestaudio/best[height<=720]",
             "outtmpl": str(dl_dir / "%(title)s.%(ext)s"),
             "writesubtitles": True,
             "writeautomaticsub": True,
@@ -282,11 +294,17 @@ Return JSON array:
             "subtitlesformat": "srt",
             "merge_output_format": "mp4",
         }
-        for attempt in range(3):
+
+        last_err: Exception = RuntimeError("Unknown error")
+
+        for fmt in self._FORMAT_FALLBACKS:
+            opts = {**base_opts, "format": fmt}
+            logger.info(f"Trying format: {fmt}")
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     ydl.extract_info(url, download=True)
-                break
+                logger.info(f"Download succeeded with format: {fmt}")
+                break  # success
             except Exception as e:
                 err = str(e)
                 if _is_bot_detection(err):
@@ -296,18 +314,31 @@ Return JSON array:
                         "Lihat README bagian 'Setup Cookies'."
                     ) from e
                 elif _is_rate_limit(err):
-                    wait = 15 * (attempt + 1)
-                    logger.warning(f"Video download 429 — waiting {wait}s (attempt {attempt+1}/3)")
+                    wait = 30
+                    logger.warning(f"Video download 429 — waiting {wait}s")
                     time.sleep(wait)
-                    if attempt == 2:
-                        raise RuntimeError("YouTube rate limit (429). Coba lagi dalam beberapa menit.") from e
+                    last_err = e
+                    continue
+                elif "Requested format is not available" in err:
+                    logger.warning(f"Format '{fmt}' not available, trying next…")
+                    last_err = e
+                    continue
                 else:
                     raise
+        else:
+            raise RuntimeError(
+                f"Semua format video gagal dicoba.\nError terakhir: {last_err}"
+            )
 
-        video_path = next(dl_dir.glob("*.mp4"), None)
+        # Find downloaded file — could be .mp4, .mkv, .webm depending on format
+        video_path = next(
+            dl_dir.glob("*.mp4"),
+            next(dl_dir.glob("*.mkv"),
+            next(dl_dir.glob("*.webm"), None))
+        )
         srt_path = next(dl_dir.glob("*.en.srt"), next(dl_dir.glob("*.id.srt"), next(dl_dir.glob("*.srt"), None)))
         if not video_path:
-            raise FileNotFoundError("Video download gagal — file mp4 tidak ditemukan.")
+            raise FileNotFoundError("Video download gagal — file tidak ditemukan.")
         return video_path, srt_path
 
     def process_chapters(self, url: str, chapters: list[dict]) -> list[dict]:
