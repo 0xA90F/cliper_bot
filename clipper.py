@@ -194,41 +194,111 @@ Return JSON array:
 
         return results
 
+    # Max clip duration in seconds (~5 minutes)
+    MAX_CLIP_DURATION_SECS = 300
+
     def _process_single_chapter(
-        self, video_path: Path, srt_path: Optional[Path], chapter: dict, video_id: str
+        self,
+        video_path: Path,
+        srt_path: Optional[Path],
+        chapter: dict,
+        video_id: str,
     ) -> dict:
         safe_title = sanitize_filename(chapter["title"])
         out_dir = self.output_dir / video_id / safe_title
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        clip_path = out_dir / f"{safe_title}_clip.mp4"
+        # ── Enforce ~5 minute duration limit ─────────────────────────────────
+        start_ms  = self._ts_to_ms(chapter["start"])
+        end_ms    = self._ts_to_ms(chapter["end"])
+        raw_secs  = (end_ms - start_ms) // 1000
 
-        # ── FFmpeg clip ───────────────────────────────────────────────────────
-        cmd = [
+        if raw_secs > self.MAX_CLIP_DURATION_SECS:
+            # Trim end to start + 5 min
+            trimmed_end_ms = start_ms + self.MAX_CLIP_DURATION_SECS * 1000
+            trimmed_end    = self._secs_to_ts(trimmed_end_ms // 1000)
+            logger.info(
+                f"Chapter '{chapter['title']}' is {raw_secs}s → trimmed to "
+                f"{self.MAX_CLIP_DURATION_SECS}s"
+            )
+        else:
+            trimmed_end = chapter["end"]
+
+        clip_path        = out_dir / f"{safe_title}_clip_raw.mp4"
+        compressed_path  = out_dir / f"{safe_title}_clip.mp4"
+
+        # ── Step 1: Fast copy-clip ────────────────────────────────────────────
+        cmd_clip = [
             "ffmpeg", "-y",
             "-ss", chapter["start"],
-            "-to", chapter["end"],
+            "-to", trimmed_end,
             "-i", str(video_path),
             "-c", "copy",
             str(clip_path),
         ]
-        subprocess.run(cmd, check=True, capture_output=True)
+        subprocess.run(cmd_clip, check=True, capture_output=True)
+
+        # ── Step 2: Compress (re-encode to smaller file) ──────────────────────
+        self._compress_video(clip_path, compressed_path)
+
+        # Remove the raw uncompressed clip
+        clip_path.unlink(missing_ok=True)
+
+        # ── Size info ─────────────────────────────────────────────────────────
+        size_mb = compressed_path.stat().st_size / 1_000_000
+        actual_duration_s = min(raw_secs, self.MAX_CLIP_DURATION_SECS)
+        logger.info(
+            f"Compressed '{safe_title}': {actual_duration_s}s → {size_mb:.1f}MB"
+        )
 
         result = {
-            "title": chapter["title"],
-            "start": chapter["start"],
-            "end": chapter["end"],
-            "summary": chapter.get("summary", ""),
-            "video_path": str(clip_path),
+            "title":    chapter["title"],
+            "start":    chapter["start"],
+            "end":      trimmed_end,
+            "summary":  chapter.get("summary", ""),
+            "video_path": str(compressed_path),
+            "size_mb":  round(size_mb, 1),
+            "duration_s": actual_duration_s,
             "srt_path": "",
         }
 
         # ── Translate subtitles ───────────────────────────────────────────────
+        effective_chapter = {**chapter, "end": trimmed_end}
         if srt_path and srt_path.exists():
-            bilingual_srt = self._translate_subtitles(srt_path, chapter, out_dir, safe_title)
+            bilingual_srt = self._translate_subtitles(
+                srt_path, effective_chapter, out_dir, safe_title
+            )
             result["srt_path"] = str(bilingual_srt)
 
         return result
+
+    def _compress_video(self, input_path: Path, output_path: Path) -> None:
+        """
+        Re-encode video with H.264 + AAC at 720p max, CRF 28.
+        Target: ~5–15 MB for a 5-minute clip at typical YouTube quality.
+        """
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(input_path),
+            # Video: H.264, scale down to max 720p (keep aspect ratio)
+            "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease",
+            "-c:v", "libx264",
+            "-crf", "28",          # Quality factor: 18=high quality, 28=smaller file
+            "-preset", "fast",     # Encoding speed vs compression tradeoff
+            "-maxrate", "1500k",   # Cap bitrate spikes
+            "-bufsize", "3000k",
+            # Audio: AAC stereo 96kbps — plenty for voice/music
+            "-c:a", "aac",
+            "-b:a", "96k",
+            "-ac", "2",
+            # Fast web start (moov atom at front)
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode != 0:
+            logger.error(f"FFmpeg compress error: {result.stderr.decode()}")
+            raise RuntimeError(f"Video compression failed: {result.stderr.decode()[-300:]}")
 
     # ─────────────────────────────────────────────────────────────────────────
     # 4. Subtitle translation (batch, bilingual EN+ID)

@@ -4,10 +4,15 @@ Runs on Railway, deployed via GitHub
 """
 
 import os
+import sys
 import logging
 import asyncio
 import re
 from pathlib import Path
+
+# Load .env file for local development (no-op if file doesn't exist)
+from dotenv import load_dotenv
+load_dotenv()
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -30,9 +35,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Config ───────────────────────────────────────────────────────────────────
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-MAX_FILE_SIZE_MB = int(os.environ.get("MAX_FILE_SIZE_MB", "50"))
+def _require_env(key: str) -> str:
+    val = os.environ.get(key)
+    if not val:
+        logger.error(
+            f"❌ Environment variable '{key}' is not set!\n"
+            "  → Local dev: copy .env.example to .env and fill in values\n"
+            "  → Railway: add it under your service Variables tab"
+        )
+        sys.exit(1)
+    return val
+
+BOT_TOKEN         = _require_env("TELEGRAM_BOT_TOKEN")
+ANTHROPIC_API_KEY = _require_env("ANTHROPIC_API_KEY")
+MAX_FILE_SIZE_MB  = int(os.environ.get("MAX_FILE_SIZE_MB", "50"))
 
 YOUTUBE_PATTERN = re.compile(
     r"(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[\w\-]+"
@@ -202,8 +218,12 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
 
         await query.edit_message_text(
-            f"🎬 Memproses {len(selected)} chapter…\n"
-            "Download + clip + terjemah subtitle. Sabar ya! ☕"
+            f"🎬 Memproses {len(selected)} chapter…\n\n"
+            "📥 Download video\n"
+            "✂️ Clip (maks. 5 menit per chapter)\n"
+            "🗜 Kompresi ke ukuran kecil\n"
+            "🌐 Terjemah subtitle EN→ID\n\n"
+            "Sabar ya, proses ini butuh beberapa menit ☕"
         )
 
         clipper: YouTubeClipper = session["clipper"]
@@ -220,16 +240,20 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
 
             for res in results:
+                dur_s = res.get("duration_s", 0)
+                dur_str = f"{dur_s//60}m{dur_s%60:02d}s"
+                size_mb = res.get("size_mb", 0)
+
                 cap = (
                     f"🎬 *{res['title']}*\n"
-                    f"⏱ {res['start']} → {res['end']}\n"
+                    f"⏱ {res['start']} → {res['end']} ({dur_str})\n"
+                    f"💾 {size_mb} MB (compressed)\n"
                     f"📝 {res.get('summary', '')}"
                 )
 
                 # Send video
                 video_path = Path(res["video_path"])
                 if video_path.exists():
-                    size_mb = video_path.stat().st_size / 1_000_000
                     if size_mb <= MAX_FILE_SIZE_MB:
                         with open(video_path, "rb") as f:
                             await query.message.reply_video(
@@ -237,7 +261,9 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                             )
                     else:
                         await query.message.reply_text(
-                            f"⚠️ *{res['title']}* terlalu besar ({size_mb:.1f}MB > {MAX_FILE_SIZE_MB}MB limit Telegram).",
+                            f"⚠️ *{res['title']}* masih terlalu besar setelah kompresi "
+                            f"({size_mb}MB > {MAX_FILE_SIZE_MB}MB limit Telegram).\n"
+                            "Coba pilih chapter yang lebih pendek.",
                             parse_mode=ParseMode.MARKDOWN,
                         )
 
