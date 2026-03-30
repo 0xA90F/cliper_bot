@@ -25,7 +25,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-from clipper import YouTubeClipper
+from clipper import YouTubeClipper, get_cookie_status
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -104,11 +104,35 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "*Catatan:*\n"
         "• Setiap clip dibatasi maks. 5 menit\n"
         "• Video otomatis dikompres agar file kecil\n"
-        "• Jika subtitle YouTube tidak tersedia, chapter dibagi otomatis per 4 menit\n\n"
+        "• Jika subtitle YouTube tidak tersedia, chapter dibagi otomatis per 3 menit\n\n"
         "*Perintah:*\n"
         "/start — Mulai\n"
         "/help  — Bantuan\n"
-        "/cancel — Batalkan proses saat ini",
+        "/cancel — Batalkan proses saat ini\n"
+        "/cookiestatus — Cek status cookies YouTube",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+async def cookiestatus_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    status = get_cookie_status()
+    icon = "✅" if status["ok"] else "❌"
+    source = status.get("source") or "—"
+    detail = status.get("detail", "")
+    await update.message.reply_text(
+        f"{icon} *Status Cookies YouTube*\n\n"
+        f"*Sumber:* `{source}`\n"
+        f"*Detail:* {detail}\n\n"
+        + (
+            "Cookies aktif — YouTube tidak akan blokir bot."
+            if status["ok"] else
+            "⚠️ Cookies bermasalah!\n\n"
+            "*Cara fix:*\n"
+            "1. Export cookies dari browser (login YouTube dulu)\n"
+            "2. Jalankan: `python export_cookies.py cookies.txt`\n"
+            "3. Copy output ke Railway Variables sebagai `YOUTUBE_COOKIES`\n"
+            "4. Atau paste langsung isi `cookies.txt` ke variable (tanpa encode)"
+        ),
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -166,7 +190,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         mode_note = (
             "🤖 _Chapter dibuat oleh AI berdasarkan isi video_"
             if used_ai else
-            "⏱ _Subtitle tidak tersedia — chapter dibagi otomatis per 4 menit_"
+            "⏱ _Subtitle tidak tersedia — chapter dibagi otomatis per 3 menit_"
         )
 
         await msg.edit_text(
@@ -318,6 +342,7 @@ def main():
     app.add_handler(CommandHandler("start",  start))
     app.add_handler(CommandHandler("help",   help_cmd))
     app.add_handler(CommandHandler("cancel", cancel_cmd))
+    app.add_handler(CommandHandler("cookiestatus", cookiestatus_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
 

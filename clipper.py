@@ -32,33 +32,92 @@ def _get_cookie_file() -> Optional[str]:
     """
     Return path to a Netscape-format cookies.txt file, or None if not configured.
     Priority:
-      1. YOUTUBE_COOKIES env var (base64-encoded cookies.txt)
+      1. YOUTUBE_COOKIES env var — accepts plain text OR base64-encoded cookies.txt
       2. /app/cookies.txt file
     """
     global _TEMP_COOKIE_FILE
 
-    cookies_b64 = os.environ.get("YOUTUBE_COOKIES", "").strip()
-    if cookies_b64:
+    raw_env = os.environ.get("YOUTUBE_COOKIES", "").strip()
+    if raw_env:
         if _TEMP_COOKIE_FILE and _TEMP_COOKIE_FILE.exists():
+            logger.info(f"Reusing cached cookie file: {_TEMP_COOKIE_FILE}")
             return str(_TEMP_COOKIE_FILE)
         try:
-            content = base64.b64decode(cookies_b64).decode("utf-8")
+            # Try base64 decode first; if it looks like Netscape header, use as-is
+            if raw_env.startswith("# Netscape") or raw_env.startswith("# HTTP"):
+                cookie_text = raw_env  # already plain text
+                logger.info("YOUTUBE_COOKIES: detected plain text format")
+            else:
+                try:
+                    cookie_text = base64.b64decode(raw_env).decode("utf-8")
+                    logger.info("YOUTUBE_COOKIES: decoded from base64")
+                except Exception:
+                    # Not valid base64 — treat as plain text anyway
+                    cookie_text = raw_env
+                    logger.info("YOUTUBE_COOKIES: using as plain text (base64 decode failed)")
+
+            if ".youtube.com" not in cookie_text:
+                logger.error(
+                    "YOUTUBE_COOKIES does not contain youtube.com cookies! "
+                    "Make sure you exported cookies while on youtube.com"
+                )
+
             tmp = tempfile.NamedTemporaryFile(
                 mode="w", suffix=".txt", delete=False, prefix="yt_cookies_"
             )
-            tmp.write(content)
+            tmp.write(cookie_text)
             tmp.close()
             _TEMP_COOKIE_FILE = Path(tmp.name)
-            logger.info(f"Cookies loaded from YOUTUBE_COOKIES env var -> {_TEMP_COOKIE_FILE}")
+
+            line_count = cookie_text.count("\n")
+            yt_lines = cookie_text.count(".youtube.com")
+            logger.info(
+                f"Cookie file written: {_TEMP_COOKIE_FILE} "
+                f"({line_count} lines, {yt_lines} youtube.com entries)"
+            )
             return str(_TEMP_COOKIE_FILE)
         except Exception as e:
-            logger.error(f"Failed to decode YOUTUBE_COOKIES: {e}")
+            logger.error(f"Failed to process YOUTUBE_COOKIES: {e}")
 
     if _COOKIE_FILE_PATH.exists():
         logger.info(f"Cookies loaded from {_COOKIE_FILE_PATH}")
         return str(_COOKIE_FILE_PATH)
 
+    logger.warning("No cookies configured — YouTube may block requests from server IPs")
     return None
+
+
+def get_cookie_status() -> dict:
+    """Return cookie status info for /cookiestatus command."""
+    raw_env = os.environ.get("YOUTUBE_COOKIES", "").strip()
+    file_exists = _COOKIE_FILE_PATH.exists()
+
+    if not raw_env and not file_exists:
+        return {"ok": False, "source": None, "detail": "Tidak ada cookies dikonfigurasi"}
+
+    source = "env var YOUTUBE_COOKIES" if raw_env else f"file {_COOKIE_FILE_PATH}"
+    cookie_path = _get_cookie_file()
+
+    if not cookie_path:
+        return {"ok": False, "source": source, "detail": "Gagal load cookies"}
+
+    try:
+        text = Path(cookie_path).read_text()
+        line_count = text.count("\n")
+        yt_count = text.count(".youtube.com")
+        has_header = "Netscape" in text or "HTTP Cookie" in text
+
+        if yt_count == 0:
+            return {
+                "ok": False, "source": source,
+                "detail": f"File ada ({line_count} baris) tapi TIDAK ada cookie youtube.com!"
+            }
+        return {
+            "ok": True, "source": source,
+            "detail": f"{yt_count} youtube.com cookies, {line_count} baris total, header={'✅' if has_header else '❌'}"
+        }
+    except Exception as e:
+        return {"ok": False, "source": source, "detail": f"Error baca file: {e}"}
 
 
 def sanitize_filename(name: str, max_len: int = 80) -> str:
