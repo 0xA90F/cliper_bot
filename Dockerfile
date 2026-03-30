@@ -1,23 +1,18 @@
 FROM python:3.11-slim
 
-# Install system dependencies: ffmpeg + yt-dlp deps
+# Install system deps: ffmpeg with libass support
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    curl \
-    ca-certificates \
+    libass9 \
+    libass-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source
 COPY . .
 
-# Non-root user for security
-RUN useradd -m botuser && chown -R botuser:botuser /app
-USER botuser
-
+# Railway injects env vars — no .env file needed in production
 CMD ["python", "bot.py"]

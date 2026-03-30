@@ -1,2 +1,5 @@
-python-telegram-bot==21.5
-yt-dlp>=2024.1.0
+python-telegram-bot==21.6
+anthropic>=0.25.0
+yt-dlp>=2024.3.10
+pysrt>=1.1.2
+python-dotenv>=1.0.0

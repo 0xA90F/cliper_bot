@@ -1,280 +1,276 @@
+"""
+YouTube Clipper Telegram Bot
+Runs on Railway, deployed via GitHub
+"""
+
 import os
-import re
-import asyncio
 import logging
-import tempfile
-import shutil
+import asyncio
+import re
 from pathlib import Path
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters,
 )
+from telegram.constants import ParseMode
+
 from clipper import YouTubeClipper
 
+# ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
+# ── Config ───────────────────────────────────────────────────────────────────
+BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 MAX_FILE_SIZE_MB = int(os.environ.get("MAX_FILE_SIZE_MB", "50"))
 
-# In-memory session store: {chat_id: {url, chapters, work_dir}}
-sessions = {}
-
-YOUTUBE_REGEX = re.compile(
+YOUTUBE_PATTERN = re.compile(
     r"(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[\w\-]+"
 )
 
+# ── User session state ────────────────────────────────────────────────────────
+# key: chat_id → { url, chapters, clipper, selected_chapters }
+sessions: dict = {}
 
-# ── /start ──────────────────────────────────────────────────────────────────
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def extract_youtube_url(text: str) -> str | None:
+    match = YOUTUBE_PATTERN.search(text)
+    return match.group(0) if match else None
+
+
+def chapters_keyboard(chapters: list, selected: set) -> InlineKeyboardMarkup:
+    buttons = []
+    for i, ch in enumerate(chapters):
+        check = "✅" if i in selected else "⬜"
+        label = f"{check} {ch['title'][:40]}"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"toggle_{i}")])
+
+    buttons.append([
+        InlineKeyboardButton("🎬 Clip Selected", callback_data="clip_selected"),
+        InlineKeyboardButton("✅ Select All",    callback_data="select_all"),
+    ])
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
+    return InlineKeyboardMarkup(buttons)
+
+
+# ── Handlers ──────────────────────────────────────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎬 *YouTube Clipper Bot*\n\n"
+        "👋 *YouTube Clipper Bot*\n\n"
         "Kirim link YouTube dan saya akan:\n"
-        "• Download video\n"
-        "• Analisis & bagi per segmen ~5 menit\n"
-        "• Kirim klip yang kamu pilih\n\n"
-        "Ketik /help untuk bantuan.",
-        parse_mode="Markdown"
+        "1️⃣ Download video\n"
+        "2️⃣ Analisis isi dengan AI → bagi jadi chapter semantik\n"
+        "3️⃣ Kamu pilih chapter mana yang mau di-clip\n"
+        "4️⃣ Kirim video clip + subtitle bilingual (EN+ID)\n\n"
+        "Cukup kirim link YouTube sekarang! 🚀",
+        parse_mode=ParseMode.MARKDOWN,
     )
 
 
-# ── /help ────────────────────────────────────────────────────────────────────
 async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📖 *Cara Pakai*\n\n"
-        "1. Kirim link YouTube (contoh: https://youtu.be/xxx)\n"
-        "2. Tunggu bot menganalisis video\n"
-        "3. Pilih segmen mana yang mau di-download\n"
-        "4. Bot akan kirim file MP4\n\n"
-        "⚠️ *Batasan*\n"
-        f"• Ukuran file max {MAX_FILE_SIZE_MB} MB per klip\n"
-        "• Video max 2 jam\n"
-        "• Durasi segmen ~5 menit\n\n"
-        "Ketik /cancel untuk membatalkan proses.",
-        parse_mode="Markdown"
+        "📖 *Cara pakai:*\n\n"
+        "• Kirim link YouTube (youtube.com atau youtu.be)\n"
+        "• Tunggu AI analisis chapter (~30 detik)\n"
+        "• Pilih chapter yang mau di-clip\n"
+        "• Tekan *Clip Selected*\n"
+        "• Terima file video + SRT subtitle\n\n"
+        "*Perintah:*\n"
+        "/start — Mulai\n"
+        "/help  — Bantuan\n"
+        "/cancel — Batalkan proses saat ini",
+        parse_mode=ParseMode.MARKDOWN,
     )
 
 
-# ── /cancel ──────────────────────────────────────────────────────────────────
-async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cancel_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    session = sessions.pop(chat_id, None)
-    if session and session.get("work_dir"):
-        shutil.rmtree(session["work_dir"], ignore_errors=True)
+    sessions.pop(chat_id, None)
     await update.message.reply_text("❌ Proses dibatalkan.")
 
 
-# ── Handle YouTube URL ────────────────────────────────────────────────────────
-async def handle_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    text = update.message.text.strip()
+    text = update.message.text or ""
 
-    if not YOUTUBE_REGEX.search(text):
+    url = extract_youtube_url(text)
+    if not url:
         await update.message.reply_text(
-            "⚠️ Sepertinya itu bukan link YouTube yang valid.\n"
-            "Contoh: https://youtu.be/dQw4w9WgXcQ"
+            "⚠️ Link YouTube tidak ditemukan.\nContoh: https://youtu.be/dQw4w9WgXcQ"
         )
         return
 
-    # Clean up old session
-    old = sessions.pop(chat_id, None)
-    if old and old.get("work_dir"):
-        shutil.rmtree(old["work_dir"], ignore_errors=True)
+    # Start processing
+    msg = await update.message.reply_text("⏳ Mendownload info video…")
 
-    msg = await update.message.reply_text("⏳ Menganalisis video, harap tunggu...")
-
-    work_dir = tempfile.mkdtemp(prefix="yt_clip_")
-    clipper = YouTubeClipper(work_dir=work_dir)
+    clipper = YouTubeClipper(
+        anthropic_api_key=ANTHROPIC_API_KEY,
+        output_dir=f"/tmp/yt-clips/{chat_id}",
+    )
+    sessions[chat_id] = {"url": url, "clipper": clipper, "selected": set()}
 
     try:
-        await ctx.bot.edit_message_text(
-            "📥 Mengambil info & subtitle video...",
-            chat_id=chat_id, message_id=msg.message_id
-        )
+        await msg.edit_text("📥 Mengambil info & subtitle…")
         info = await asyncio.get_event_loop().run_in_executor(
-            None, clipper.fetch_info_and_subtitles, text
+            None, clipper.fetch_info, url
         )
 
-        await ctx.bot.edit_message_text(
-            "🧠 Membagi video menjadi segmen ~5 menit...",
-            chat_id=chat_id, message_id=msg.message_id
+        await msg.edit_text(
+            f"🤖 AI sedang analisis chapter untuk:\n*{info['title'][:60]}*\n\n"
+            "Mohon tunggu ~30 detik…",
+            parse_mode=ParseMode.MARKDOWN,
         )
-        chapters = clipper.generate_chapters(info)
-
-        if not chapters:
-            await ctx.bot.edit_message_text(
-                "❌ Tidak bisa membagi video. Pastikan video memiliki subtitle.",
-                chat_id=chat_id, message_id=msg.message_id
-            )
-            shutil.rmtree(work_dir, ignore_errors=True)
-            return
-
-        sessions[chat_id] = {
-            "url": text,
-            "chapters": chapters,
-            "info": info,
-            "work_dir": work_dir,
-            "clipper": clipper,
-        }
-
-        # Build chapter selection keyboard
-        title = info.get("title", "Video")[:50]
-        duration_str = _fmt_duration(info.get("duration", 0))
-        text_out = (
-            f"🎬 *{title}*\n"
-            f"⏱ Durasi: {duration_str}\n"
-            f"📋 {len(chapters)} segmen ditemukan\n\n"
-            "Pilih segmen yang ingin diunduh:"
+        chapters = await asyncio.get_event_loop().run_in_executor(
+            None, clipper.generate_chapters, url
         )
 
-        keyboard = []
-        for i, ch in enumerate(chapters):
-            label = f"{i+1}. {ch['title'][:30]} ({ch['start_fmt']}–{ch['end_fmt']})"
-            keyboard.append([InlineKeyboardButton(label, callback_data=f"clip_{i}")])
-        keyboard.append([InlineKeyboardButton("📦 Unduh Semua", callback_data="clip_all")])
-        keyboard.append([InlineKeyboardButton("❌ Batal", callback_data="clip_cancel")])
+        sessions[chat_id]["chapters"] = chapters
+        sessions[chat_id]["info"] = info
 
-        await ctx.bot.edit_message_text(
-            text_out,
-            chat_id=chat_id,
-            message_id=msg.message_id,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
+        chapter_list = "\n".join(
+            f"{i+1}. [{ch['start']} → {ch['end']}] {ch['title']}"
+            for i, ch in enumerate(chapters)
+        )
+
+        await msg.edit_text(
+            f"✅ Ditemukan *{len(chapters)} chapter* untuk:\n"
+            f"*{info['title'][:60]}*\n\n"
+            f"```\n{chapter_list}\n```\n\n"
+            "Pilih chapter yang mau di-clip:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=chapters_keyboard(chapters, set()),
         )
 
     except Exception as e:
-        logger.exception("Error processing URL")
-        shutil.rmtree(work_dir, ignore_errors=True)
+        logger.exception("Error during fetch/analyze")
         sessions.pop(chat_id, None)
-        await ctx.bot.edit_message_text(
-            f"❌ Gagal memproses video:\n`{str(e)[:200]}`",
-            chat_id=chat_id, message_id=msg.message_id,
-            parse_mode="Markdown"
-        )
+        await msg.edit_text(f"❌ Error: {e}\n\nCoba lagi dengan link lain.")
 
 
-# ── Callback: chapter selection ───────────────────────────────────────────────
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    chat_id = update.effective_chat.id
+    chat_id = query.message.chat_id
     data = query.data
-
-    if data == "clip_cancel":
-        session = sessions.pop(chat_id, None)
-        if session and session.get("work_dir"):
-            shutil.rmtree(session["work_dir"], ignore_errors=True)
-        await query.edit_message_text("❌ Dibatalkan.")
-        return
 
     session = sessions.get(chat_id)
     if not session:
-        await query.edit_message_text("⚠️ Sesi kedaluwarsa. Kirim URL lagi.")
+        await query.edit_message_text("⚠️ Sesi tidak ditemukan. Kirim link YouTube lagi.")
         return
 
-    chapters = session["chapters"]
-    if data == "clip_all":
-        indices = list(range(len(chapters)))
-    elif data.startswith("clip_"):
-        indices = [int(data.split("_")[1])]
-    else:
-        return
+    chapters = session.get("chapters", [])
+    selected: set = session["selected"]
 
-    await query.edit_message_text(
-        f"⬇️ Mengunduh & memotong {len(indices)} segmen... Harap tunggu."
-    )
-
-    clipper: YouTubeClipper = session["clipper"]
-    url = session["url"]
-    work_dir = session["work_dir"]
-
-    # Download full video first
-    try:
-        status_msg = await ctx.bot.send_message(chat_id, "📥 Mengunduh video penuh...")
-        video_path = await asyncio.get_event_loop().run_in_executor(
-            None, clipper.download_video, url
+    # ── Toggle chapter selection ──────────────────────────────────────────────
+    if data.startswith("toggle_"):
+        idx = int(data.split("_")[1])
+        if idx in selected:
+            selected.discard(idx)
+        else:
+            selected.add(idx)
+        await query.edit_message_reply_markup(
+            reply_markup=chapters_keyboard(chapters, selected)
         )
-        await ctx.bot.edit_message_text(
-            "✂️ Memotong segmen...", chat_id=chat_id, message_id=status_msg.message_id
-        )
-    except Exception as e:
-        await ctx.bot.send_message(chat_id, f"❌ Gagal download: `{str(e)[:200]}`", parse_mode="Markdown")
-        return
 
-    sent = 0
-    for idx in indices:
-        ch = chapters[idx]
+    # ── Select all ────────────────────────────────────────────────────────────
+    elif data == "select_all":
+        selected.update(range(len(chapters)))
+        await query.edit_message_reply_markup(
+            reply_markup=chapters_keyboard(chapters, selected)
+        )
+
+    # ── Cancel ────────────────────────────────────────────────────────────────
+    elif data == "cancel":
+        sessions.pop(chat_id, None)
+        await query.edit_message_text("❌ Proses dibatalkan.")
+
+    # ── Start clipping ────────────────────────────────────────────────────────
+    elif data == "clip_selected":
+        if not selected:
+            await query.answer("⚠️ Pilih minimal 1 chapter!", show_alert=True)
+            return
+
+        await query.edit_message_text(
+            f"🎬 Memproses {len(selected)} chapter…\n"
+            "Download + clip + terjemah subtitle. Sabar ya! ☕"
+        )
+
+        clipper: YouTubeClipper = session["clipper"]
+        url = session["url"]
+        chosen = sorted(selected)
+
         try:
-            clip_path = await asyncio.get_event_loop().run_in_executor(
-                None, clipper.clip_segment, video_path, ch, idx
+            results = await asyncio.get_event_loop().run_in_executor(
+                None, clipper.process_chapters, url, [chapters[i] for i in chosen]
             )
-            file_size_mb = os.path.getsize(clip_path) / (1024 * 1024)
 
-            if file_size_mb > MAX_FILE_SIZE_MB:
-                await ctx.bot.send_message(
-                    chat_id,
-                    f"⚠️ Segmen *{ch['title']}* terlalu besar ({file_size_mb:.1f} MB > {MAX_FILE_SIZE_MB} MB), dilewati.",
-                    parse_mode="Markdown"
-                )
-                continue
-
-            caption = (
-                f"🎬 *{ch['title']}*\n"
-                f"⏱ {ch['start_fmt']} → {ch['end_fmt']}\n"
-                f"📦 {file_size_mb:.1f} MB"
+            await query.message.reply_text(
+                f"✅ Selesai! Mengirim {len(results)} file…"
             )
-            with open(clip_path, "rb") as f:
-                await ctx.bot.send_video(
-                    chat_id,
-                    video=f,
-                    caption=caption,
-                    parse_mode="Markdown",
-                    supports_streaming=True,
-                    read_timeout=300,
-                    write_timeout=300
+
+            for res in results:
+                cap = (
+                    f"🎬 *{res['title']}*\n"
+                    f"⏱ {res['start']} → {res['end']}\n"
+                    f"📝 {res.get('summary', '')}"
                 )
-            sent += 1
+
+                # Send video
+                video_path = Path(res["video_path"])
+                if video_path.exists():
+                    size_mb = video_path.stat().st_size / 1_000_000
+                    if size_mb <= MAX_FILE_SIZE_MB:
+                        with open(video_path, "rb") as f:
+                            await query.message.reply_video(
+                                f, caption=cap[:1024], parse_mode=ParseMode.MARKDOWN
+                            )
+                    else:
+                        await query.message.reply_text(
+                            f"⚠️ *{res['title']}* terlalu besar ({size_mb:.1f}MB > {MAX_FILE_SIZE_MB}MB limit Telegram).",
+                            parse_mode=ParseMode.MARKDOWN,
+                        )
+
+                # Send SRT subtitle
+                srt_path = Path(res.get("srt_path", ""))
+                if srt_path.exists():
+                    with open(srt_path, "rb") as f:
+                        await query.message.reply_document(
+                            f,
+                            filename=srt_path.name,
+                            caption=f"📝 Subtitle bilingual: {res['title']}",
+                        )
+
+            sessions.pop(chat_id, None)
+
         except Exception as e:
-            logger.exception(f"Error clipping segment {idx}")
-            await ctx.bot.send_message(
-                chat_id,
-                f"❌ Gagal klip segmen *{ch['title']}*: `{str(e)[:150]}`",
-                parse_mode="Markdown"
-            )
-
-    # Cleanup
-    session = sessions.pop(chat_id, None)
-    if session and session.get("work_dir"):
-        shutil.rmtree(session["work_dir"], ignore_errors=True)
-
-    await ctx.bot.edit_message_text(
-        f"✅ Selesai! {sent}/{len(indices)} segmen berhasil dikirim.",
-        chat_id=chat_id, message_id=status_msg.message_id
-    )
+            logger.exception("Clipping error")
+            sessions.pop(chat_id, None)
+            await query.message.reply_text(f"❌ Error saat clipping: {e}")
 
 
-def _fmt_duration(seconds: int) -> str:
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
-    if h:
-        return f"{h}j {m}m {s}d"
-    return f"{m}m {s}d"
-
-
+# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("cancel", cancel))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
+
+    app.add_handler(CommandHandler("start",  start))
+    app.add_handler(CommandHandler("help",   help_cmd))
+    app.add_handler(CommandHandler("cancel", cancel_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
-    logger.info("Bot started polling...")
-    app.run_polling(drop_pending_updates=True)
+
+    logger.info("Bot started — polling…")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":

@@ -1,142 +1,143 @@
-# 🎬 YouTube Clipper Telegram Bot
+# 🎬 YouTube Clipper — Telegram Bot
 
-Bot Telegram yang otomatis memotong video YouTube menjadi segmen ~5 menit dan mengirimkannya langsung ke chat.
-
-## Fitur
-
-- ✅ Download video YouTube (hingga 720p)
-- ✅ Otomatis bagi per segmen ~5 menit (bisa diatur)
-- ✅ Pilih segmen mana yang mau diunduh
-- ✅ Kirim langsung sebagai file MP4 ke Telegram
-- ✅ Mendukung pembagian berdasarkan chapter asli video
-- ✅ Fallback ke pembagian waktu jika tidak ada subtitle/chapter
+Bot Telegram yang meng-clip video YouTube secara cerdas menggunakan AI (Claude).  
+Deploy gratis di **Railway** via **GitHub**.
 
 ---
 
-## 🚀 Deploy ke Railway via GitHub
+## ✨ Fitur
 
-### Langkah 1: Buat Bot Telegram
-
-1. Buka Telegram, cari **@BotFather**
-2. Kirim `/newbot`
-3. Ikuti instruksi, dapatkan **BOT_TOKEN** (format: `1234567890:ABCxyz...`)
-
----
-
-### Langkah 2: Upload ke GitHub
-
-1. Buat repository baru di [github.com/new](https://github.com/new)
-   - Nama: `yt-clipper-bot` (bebas)
-   - Visibility: **Private** (direkomendasikan)
-   - Klik **Create repository**
-
-2. Upload semua file proyek ini:
-   ```
-   bot.py
-   clipper.py
-   requirements.txt
-   Dockerfile
-   railway.toml
-   .gitignore
-   .env.example
-   README.md
-   ```
-
-   **Via GitHub web:**
-   - Klik **Add file → Upload files**
-   - Drag & drop semua file
-   - Klik **Commit changes**
-
-   **Via Git CLI:**
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git remote add origin https://github.com/USERNAME/yt-clipper-bot.git
-   git push -u origin main
-   ```
+| Fitur | Keterangan |
+|-------|-----------|
+| 🤖 AI Chapter Analysis | Claude analisis transcript → bagi jadi chapter semantik (bukan potong asal) |
+| ✂️ Precise Clipping | FFmpeg clip dengan timing frame-accurate |
+| 🌐 Bilingual Subtitles | Terjemah subtitle EN → Indonesia secara batch (hemat API call) |
+| 📤 Auto Send | Bot langsung kirim file `.mp4` + `.srt` ke Telegram |
 
 ---
 
-### Langkah 3: Deploy ke Railway
+## 🚀 Deploy ke Railway (via GitHub)
 
-1. Buka [railway.app](https://railway.app) dan login (bisa pakai akun GitHub)
+### Langkah 1 — Buat Bot Telegram
 
+1. Buka Telegram → cari **@BotFather**
+2. Ketik `/newbot` → ikuti instruksi
+3. Simpan **Bot Token** yang diberikan
+
+### Langkah 2 — Dapatkan Anthropic API Key
+
+1. Buka [console.anthropic.com](https://console.anthropic.com)
+2. Buat API Key baru
+3. Simpan key-nya
+
+### Langkah 3 — Push ke GitHub
+
+```bash
+# Clone / fork repo ini, atau buat repo baru
+git init
+git add .
+git commit -m "Initial commit"
+git remote add origin https://github.com/USERNAME/yt-clipper-bot.git
+git push -u origin main
+```
+
+### Langkah 4 — Deploy di Railway
+
+1. Buka [railway.app](https://railway.app) → Login dengan GitHub
 2. Klik **New Project → Deploy from GitHub repo**
+3. Pilih repo `yt-clipper-bot`
+4. Railway otomatis detect `Dockerfile` dan mulai build
 
-3. Pilih repository `yt-clipper-bot` yang tadi dibuat
+### Langkah 5 — Set Environment Variables di Railway
 
-4. Railway akan otomatis deteksi Dockerfile
+Di dashboard Railway → tab **Variables**, tambahkan:
 
-5. **Tambahkan Environment Variable:**
-   - Klik tab **Variables**
-   - Klik **New Variable**
-   - Tambahkan:
-     | Key | Value |
-     |-----|-------|
-     | `BOT_TOKEN` | Token dari BotFather |
-     | `TARGET_SEGMENT_DURATION` | `300` (5 menit, opsional) |
-     | `MAX_FILE_SIZE_MB` | `50` (opsional) |
+| Variable | Value |
+|----------|-------|
+| `TELEGRAM_BOT_TOKEN` | Token dari BotFather |
+| `ANTHROPIC_API_KEY` | API key dari Anthropic |
+| `MAX_FILE_SIZE_MB` | `50` (opsional, default 50) |
 
-6. Klik **Deploy** — Railway akan build & run otomatis
-
-7. Selesai! Bot aktif 24/7 🎉
+Setelah disimpan, Railway otomatis restart dan bot langsung aktif! ✅
 
 ---
 
-### Langkah 4: Test Bot
+## 💻 Jalankan Lokal (Development)
 
-Buka Telegram, cari bot kamu, kirim:
+```bash
+# Clone repo
+git clone https://github.com/USERNAME/yt-clipper-bot.git
+cd yt-clipper-bot
+
+# Setup env
+cp .env.example .env
+# Edit .env → isi TELEGRAM_BOT_TOKEN dan ANTHROPIC_API_KEY
+
+# Install deps Python
+pip install -r requirements.txt
+
+# Install sistem deps (Ubuntu/Debian)
+sudo apt install ffmpeg libass-dev
+
+# Jalankan bot
+python bot.py
 ```
-/start
+
+---
+
+## 🤖 Cara Pakai Bot
+
+1. Cari bot kamu di Telegram → `/start`
+2. Kirim link YouTube:
+   ```
+   https://youtube.com/watch?v=VIDEO_ID
+   ```
+3. Tunggu AI analisis chapter (~30 detik)
+4. Pilih chapter yang mau di-clip dengan tap tombol ✅
+5. Tekan **🎬 Clip Selected**
+6. Terima file `.mp4` + `.srt` bilingual di chat!
+
+---
+
+## 📂 Struktur Project
+
 ```
-Lalu kirim link YouTube:
+yt-clipper-bot/
+├── bot.py              # Telegram bot handler & conversation flow
+├── clipper.py          # Core logic: download, AI chapters, clip, translate
+├── requirements.txt    # Python dependencies
+├── Dockerfile          # Container image (Railway pakai ini)
+├── railway.toml        # Railway deployment config
+├── .env.example        # Template environment variables
+└── .gitignore
 ```
-https://youtu.be/dQw4w9WgXcQ
-```
 
 ---
 
-## Perintah Bot
+## ⚠️ Batasan
 
-| Perintah | Fungsi |
-|----------|--------|
-| `/start` | Pesan sambutan |
-| `/help` | Panduan penggunaan |
-| `/cancel` | Batalkan proses aktif |
-| *(kirim URL YouTube)* | Mulai proses klip |
+- File video ≤ 50MB bisa langsung dikirim via Telegram (bot limit)
+- Untuk video lebih besar, bot kirim notifikasi ukuran file
+- Subtitle otomatis (auto-generated) kadang kurang akurat untuk bahasa non-English
 
 ---
 
-## Konfigurasi
+## 🛠️ Troubleshooting
 
-| Variabel | Default | Keterangan |
-|----------|---------|------------|
-| `BOT_TOKEN` | — | **Wajib** — token dari BotFather |
-| `TARGET_SEGMENT_DURATION` | `300` | Durasi segmen dalam detik (300 = 5 menit) |
-| `MAX_FILE_SIZE_MB` | `50` | Batas ukuran file yang dikirim |
+**Bot tidak merespons:**
+- Pastikan `TELEGRAM_BOT_TOKEN` benar di Railway Variables
+- Cek Railway Logs untuk error
 
----
+**Error download video:**
+- Beberapa video YouTube di-region lock
+- Coba set proxy di env: `YT_DLP_PROXY=http://proxy:port`
 
-## Catatan
-
-- Telegram membatasi upload file hingga **50 MB** untuk bot biasa
-- Video panjang (>1 jam) membutuhkan waktu lebih lama untuk diproses
-- Railway free tier memiliki batas resource — upgrade jika perlu
-- Untuk video yang sangat besar, pertimbangkan meningkatkan timeout
+**Subtitle tidak ter-generate:**
+- Tidak semua video YouTube punya subtitle
+- Bot akan skip translasi dan tetap kirim clip video
 
 ---
 
-## Troubleshooting
+## 📝 Lisensi
 
-**Bot tidak merespons?**
-- Cek log di Railway dashboard → **Deployments → View Logs**
-- Pastikan `BOT_TOKEN` sudah benar di Variables
-
-**"Download gagal"?**
-- Video mungkin dibatasi geografis atau privat
-- Coba video lain sebagai tes
-
-**File terlalu besar?**
-- Kurangi `TARGET_SEGMENT_DURATION` (misal `180` = 3 menit)
-- Atau naikkan `MAX_FILE_SIZE_MB` (max 50 untuk Telegram bot)
+MIT License — bebas digunakan dan dimodifikasi.
