@@ -27,14 +27,14 @@ from telegram.constants import ParseMode
 
 from clipper import YouTubeClipper
 
-# ── Logging ──────────────────────────────────────────────────────────────────
+# ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
-# ── Config ───────────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
 def _require_env(key: str) -> str:
     val = os.environ.get(key)
     if not val:
@@ -54,8 +54,7 @@ YOUTUBE_PATTERN = re.compile(
     r"(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[\w\-]+"
 )
 
-# ── User session state ────────────────────────────────────────────────────────
-# key: chat_id → { url, chapters, clipper, selected_chapters }
+# ── User session state ─────────────────────────────────────────────────────────
 sessions: dict = {}
 
 
@@ -88,7 +87,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "1️⃣ Download video\n"
         "2️⃣ Analisis isi dengan AI → bagi jadi chapter semantik\n"
         "3️⃣ Kamu pilih chapter mana yang mau di-clip\n"
-        "4️⃣ Kirim video clip + subtitle bilingual (EN+ID)\n\n"
+        "4️⃣ Kirim video clip (maks. 5 menit, sudah dikompresi) + subtitle bilingual (EN+ID)\n\n"
         "Cukup kirim link YouTube sekarang! 🚀",
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -102,6 +101,10 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• Pilih chapter yang mau di-clip\n"
         "• Tekan *Clip Selected*\n"
         "• Terima file video + SRT subtitle\n\n"
+        "*Catatan:*\n"
+        "• Setiap clip dibatasi maks. 5 menit\n"
+        "• Video otomatis dikompres agar file kecil\n"
+        "• Jika subtitle YouTube tidak tersedia, chapter dibagi otomatis per 3 menit\n\n"
         "*Perintah:*\n"
         "/start — Mulai\n"
         "/help  — Bantuan\n"
@@ -127,8 +130,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Start processing
-    msg = await update.message.reply_text("⏳ Mendownload info video…")
+    msg = await update.message.reply_text("⏳ Mengambil info video…")
 
     clipper = YouTubeClipper(
         anthropic_api_key=ANTHROPIC_API_KEY,
@@ -137,17 +139,19 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sessions[chat_id] = {"url": url, "clipper": clipper, "selected": set()}
 
     try:
-        await msg.edit_text("📥 Mengambil info & subtitle…")
         info = await asyncio.get_event_loop().run_in_executor(
             None, clipper.fetch_info, url
         )
 
         await msg.edit_text(
             f"🤖 AI sedang analisis chapter untuk:\n*{info['title'][:60]}*\n\n"
-            "Mohon tunggu ~30 detik…",
+            "Mengambil subtitle + analisis konten…\n"
+            "_(Jika subtitle YouTube rate-limited, akan pakai pembagian otomatis)_",
             parse_mode=ParseMode.MARKDOWN,
         )
-        chapters = await asyncio.get_event_loop().run_in_executor(
+
+        # generate_chapters now returns (chapters, used_ai)
+        chapters, used_ai = await asyncio.get_event_loop().run_in_executor(
             None, clipper.generate_chapters, url
         )
 
@@ -159,10 +163,17 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             for i, ch in enumerate(chapters)
         )
 
+        mode_note = (
+            "🤖 _Chapter dibuat oleh AI berdasarkan isi video_"
+            if used_ai else
+            "⏱ _Subtitle tidak tersedia — chapter dibagi otomatis per 3 menit_"
+        )
+
         await msg.edit_text(
             f"✅ Ditemukan *{len(chapters)} chapter* untuk:\n"
             f"*{info['title'][:60]}*\n\n"
             f"```\n{chapter_list}\n```\n\n"
+            f"{mode_note}\n\n"
             "Pilih chapter yang mau di-clip:",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=chapters_keyboard(chapters, set()),
@@ -171,7 +182,10 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.exception("Error during fetch/analyze")
         sessions.pop(chat_id, None)
-        await msg.edit_text(f"❌ Error: {e}\n\nCoba lagi dengan link lain.")
+        await msg.edit_text(
+            f"❌ Error: {e}\n\n"
+            "💡 Tip: Jika error 429, tunggu beberapa menit lalu coba lagi."
+        )
 
 
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -188,7 +202,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chapters = session.get("chapters", [])
     selected: set = session["selected"]
 
-    # ── Toggle chapter selection ──────────────────────────────────────────────
+    # ── Toggle chapter ────────────────────────────────────────────────────────
     if data.startswith("toggle_"):
         idx = int(data.split("_")[1])
         if idx in selected:
@@ -211,7 +225,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         sessions.pop(chat_id, None)
         await query.edit_message_text("❌ Proses dibatalkan.")
 
-    # ── Start clipping ────────────────────────────────────────────────────────
+    # ── Clip selected ─────────────────────────────────────────────────────────
     elif data == "clip_selected":
         if not selected:
             await query.answer("⚠️ Pilih minimal 1 chapter!", show_alert=True)
@@ -219,10 +233,10 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         await query.edit_message_text(
             f"🎬 Memproses {len(selected)} chapter…\n\n"
-            "📥 Download video\n"
-            "✂️ Clip (maks. 5 menit per chapter)\n"
-            "🗜 Kompresi ke ukuran kecil\n"
-            "🌐 Terjemah subtitle EN→ID\n\n"
+            "📥 Download video (720p)\n"
+            "✂️  Clip (maks. 5 menit per chapter)\n"
+            "🗜  Kompresi H.264 → file kecil\n"
+            "🌐 Terjemah subtitle EN → ID\n\n"
             "Sabar ya, proses ini butuh beberapa menit ☕"
         )
 
@@ -235,12 +249,23 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 None, clipper.process_chapters, url, [chapters[i] for i in chosen]
             )
 
-            await query.message.reply_text(
-                f"✅ Selesai! Mengirim {len(results)} file…"
-            )
+            success = [r for r in results if not r.get("error")]
+            failed  = [r for r in results if r.get("error")]
+
+            summary = f"✅ Selesai! {len(success)} clip berhasil"
+            if failed:
+                summary += f", {len(failed)} gagal"
+            await query.message.reply_text(summary)
 
             for res in results:
-                dur_s = res.get("duration_s", 0)
+                if res.get("error"):
+                    await query.message.reply_text(
+                        f"❌ *{res['title']}* gagal diproses:\n`{res['error']}`",
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+                    continue
+
+                dur_s   = res.get("duration_s", 0)
                 dur_str = f"{dur_s//60}m{dur_s%60:02d}s"
                 size_mb = res.get("size_mb", 0)
 
@@ -251,7 +276,6 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f"📝 {res.get('summary', '')}"
                 )
 
-                # Send video
                 video_path = Path(res["video_path"])
                 if video_path.exists():
                     if size_mb <= MAX_FILE_SIZE_MB:
@@ -267,14 +291,13 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                             parse_mode=ParseMode.MARKDOWN,
                         )
 
-                # Send SRT subtitle
                 srt_path = Path(res.get("srt_path", ""))
                 if srt_path.exists():
                     with open(srt_path, "rb") as f:
                         await query.message.reply_document(
                             f,
                             filename=srt_path.name,
-                            caption=f"📝 Subtitle bilingual: {res['title']}",
+                            caption=f"📝 Subtitle bilingual EN+ID: {res['title']}",
                         )
 
             sessions.pop(chat_id, None)
@@ -282,7 +305,10 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.exception("Clipping error")
             sessions.pop(chat_id, None)
-            await query.message.reply_text(f"❌ Error saat clipping: {e}")
+            await query.message.reply_text(
+                f"❌ Error saat clipping: {e}\n\n"
+                "💡 Jika error 429, tunggu beberapa menit lalu coba lagi."
+            )
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
