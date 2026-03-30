@@ -104,7 +104,7 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "*Catatan:*\n"
         "• Setiap clip dibatasi maks. 5 menit\n"
         "• Video otomatis dikompres agar file kecil\n"
-        "• Jika subtitle YouTube tidak tersedia, chapter dibagi otomatis per 4,50 menit\n\n"
+        "• Jika subtitle YouTube tidak tersedia, chapter dibagi otomatis per 4 menit\n\n"
         "*Perintah:*\n"
         "/start — Mulai\n"
         "/help  — Bantuan\n"
@@ -166,7 +166,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         mode_note = (
             "🤖 _Chapter dibuat oleh AI berdasarkan isi video_"
             if used_ai else
-            "⏱ _Subtitle tidak tersedia — chapter dibagi otomatis per 3 menit_"
+            "⏱ _Subtitle tidak tersedia — chapter dibagi otomatis per 4 menit_"
         )
 
         await msg.edit_text(
