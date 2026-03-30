@@ -426,9 +426,9 @@ Return JSON array:
     def _compress_video(self, input_path: Path, output_path: Path) -> None:
         cmd = [
             "ffmpeg", "-y", "-i", str(input_path),
-            "-vf", "scale='min(854,iw)':'min(480,ih)':force_original_aspect_ratio=decrease",
+            "-vf", "scale='min(672,iw)':'min(380,ih)':force_original_aspect_ratio=decrease",
             "-c:v", "libx264", "-crf", "28", "-preset", "fast",
-            "-maxrate", "800k", "-bufsize", "1600k",
+            "-maxrate", "600k", "-bufsize", "1200k",
             "-c:a", "aac", "-b:a", "96k", "-ac", "2",
             "-movflags", "+faststart", str(output_path),
         ]
