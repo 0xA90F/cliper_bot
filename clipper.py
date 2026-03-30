@@ -292,7 +292,7 @@ Return JSON array:
             logger.warning(f"AI chapter analysis failed ({e}) — time-based fallback")
             return self._time_based_chapters(duration), False
 
-    def _time_based_chapters(self, duration: int, chapter_secs: int = 180) -> list[dict]:
+    def _time_based_chapters(self, duration: int, chapter_secs: int = 300) -> list[dict]:
         chapters, start = [], 0
         while start < duration:
             end = min(start + chapter_secs, duration)
