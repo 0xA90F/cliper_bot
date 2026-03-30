@@ -215,7 +215,7 @@ Return JSON array:
         dl_dir.mkdir(parents=True, exist_ok=True)
         opts = {
             **self._base_ydl_opts(),
-            "format": "bestvideo[height<=720]+bestaudio/best[height<=720]",
+            "format": "bestvideo[height<=480]+bestaudio/best[height<=4800]",
             "outtmpl": str(dl_dir / "%(title)s.%(ext)s"),
             "writesubtitles": True,
             "writeautomaticsub": True,
