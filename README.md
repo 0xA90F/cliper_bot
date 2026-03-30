@@ -141,3 +141,45 @@ yt-clipper-bot/
 ## 📝 Lisensi
 
 MIT License — bebas digunakan dan dimodifikasi.
+
+---
+
+## 🍪 Setup Cookies (Wajib untuk Railway)
+
+YouTube mendeteksi server cloud sebagai bot. Solusinya adalah memberikan cookies dari browser yang sudah login YouTube.
+
+### Langkah 1 — Export cookies dari browser
+
+**Chrome / Edge / Brave:**
+1. Install ekstensi [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
+2. Buka [youtube.com](https://youtube.com) → pastikan sudah **login**
+3. Klik ikon ekstensi → **Export** → simpan sebagai `cookies.txt`
+
+**Firefox:**
+1. Install ekstensi [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
+2. Buka [youtube.com](https://youtube.com) → pastikan sudah **login**
+3. Klik ikon ekstensi → **Current Site** → download `cookies.txt`
+
+### Langkah 2 — Encode ke base64
+
+```bash
+python export_cookies.py cookies.txt
+```
+
+Script akan print nilai base64 yang panjang.
+
+### Langkah 3 — Set di Railway
+
+Di Railway dashboard → **Variables** → tambahkan:
+
+| Variable | Value |
+|----------|-------|
+| `YOUTUBE_COOKIES` | _(paste hasil base64 dari langkah 2)_ |
+
+Railway otomatis restart dan cookies langsung aktif ✅
+
+### Catatan Penting
+
+- Cookies akan **expired** setelah beberapa minggu/bulan → perlu diperbarui
+- Gunakan akun YouTube yang **tidak penting** (bukan akun utama)
+- Jangan share cookies ke orang lain — ini sama seperti password
